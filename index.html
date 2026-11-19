@@ -36,9 +36,14 @@ main{display:grid;grid-template-columns:minmax(290px,380px) minmax(0,1fr);gap:1r
 .pane{background:#fff;border-radius:16px;padding:1rem;box-shadow:0 2px 8px #0001;min-width:0}
 
 /* Teclado */
-#disp{min-height:4rem;display:flex;align-items:center;justify-content:flex-end;padding:.5rem .8rem;margin-bottom:.8rem;border-radius:12px;background:#f1f5f9;
-  font:600 1.8rem ui-monospace,Consolas,monospace;overflow-x:auto;white-space:nowrap}
-#disp.empty{font:500 1rem system-ui,sans-serif;color:#94a3b8}
+#disp{min-height:4rem;display:flex;align-items:center;padding:.5rem .8rem;margin-bottom:.8rem;border-radius:12px;background:#f1f5f9;
+  font:600 1.8rem ui-monospace,Consolas,monospace;overflow-x:auto;white-space:nowrap;cursor:text;-webkit-user-select:none;user-select:none}
+#disp.empty{font:500 1rem system-ui,sans-serif;color:#94a3b8;cursor:default}
+#disp .ex{margin-left:auto;white-space:nowrap}
+#disp .ex span{display:inline-block;padding:.1em .04em}
+#disp .ex span.op{padding:.1em .3em;color:#1d4ed8}
+.caret{display:inline-block;width:2px;height:1.25em;background:#2563eb;vertical-align:text-bottom;margin:0 -1px;pointer-events:none;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
 .keys{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem}
 .keys button{height:3.6rem;border:0;border-radius:12px;font-size:1.5rem;font-weight:600;background:#e2e8f0;color:var(--ink);cursor:pointer;touch-action:manipulation}
 .keys button:active{transform:scale(.96);filter:brightness(.92)}
@@ -354,55 +359,83 @@ function division(A,B,mode){
 }
 
 /* ---------- Estado y teclado ---------- */
-let nums=[''], op=null, toastT=null, cur=null, divMode='rem';
+let expr='', pos=0, toastT=null, cur=null, divMode='rem';
+const OPCH='+-*/';
+const isOp=ch=>ch!==undefined&&OPCH.indexOf(ch)>=0;
 function toast(m){
   const t=$('#toast'); t.textContent=m; t.classList.add('show');
   clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2600);
 }
 function drawDisp(){
   const d=$('#disp');
-  if(nums.length===1&&!nums[0]){ d.className='empty'; d.textContent='Escribe una operación'; return; }
+  if(!expr){ d.className='empty'; d.innerHTML='<div class="ex">Escribe una operación</div>'; return; }
   d.className='';
-  d.textContent=nums.map((n,i)=>n+(i<nums.length-1?' '+SYM[op]+' ':'')).join('');
-}
-function pressDigit(dg){
-  const i=nums.length-1, s=nums[i], ci=s.indexOf(',');
-  if(ci>=0){
-    if(s.length-ci-1>=MAXDEC){ toast('Máximo '+MAXDEC+' decimales'); return; }
-    nums[i]=s+dg;
-  } else {
-    if(s.length>=MAXD&&s!=='0'){ toast('Máximo '+MAXD+' cifras enteras'); return; }
-    nums[i]=(s==='0')?String(dg):s+dg;
+  let h='';
+  for(let i=0;i<=expr.length;i++){
+    if(i===pos) h+='<i class="caret"></i>';
+    if(i<expr.length){
+      const ch=expr[i], o=isOp(ch);
+      h+='<span data-i="'+i+'"'+(o?' class="op"':'')+'>'+(o?SYM[ch]:ch)+'</span>';
+    }
   }
-  drawDisp();
+  d.innerHTML='<div class="ex">'+h+'</div>';
+  const c=d.querySelector('.caret');
+  if(c&&c.scrollIntoView){ try{ c.scrollIntoView({block:'nearest',inline:'nearest'}); }catch(_){} }
 }
+function check(t){
+  const ops=t.match(/[+\-*\/]/g)||[];
+  if(ops.length>0&&(ops.some(o=>o!==ops[0])||(ops[0]!=='+'&&ops.length>1)))
+    return 'Una sola operación cada vez (la suma admite varios sumandos)';
+  for(const p of t.split(/[+\-*\/]/)){
+    const q=p.split(',');
+    if(q.length>2) return 'Un número solo puede tener una coma';
+    if(q[0].length>MAXD) return 'Máximo '+MAXD+' cifras enteras';
+    if(q.length>1&&q[1].length>MAXDEC) return 'Máximo '+MAXDEC+' decimales';
+  }
+  return null;
+}
+function normalize(t,p){
+  let out='', np=p, idx=0;
+  t.split(/([+\-*\/])/).forEach(part=>{
+    if(part.length===1&&isOp(part)){ out+=part; idx+=1; return; }
+    const m=part.match(/^0+(?=\d)/);
+    if(m){ const rm=m[0].length; if(p>idx) np-=Math.min(rm,p-idx); }
+    out+=part.replace(/^0+(?=\d)/,'');
+    idx+=part.length;
+  });
+  return {s:out,p:Math.max(0,np)};
+}
+function commit(t,p){
+  const m=check(t); if(m){ toast(m); return false; }
+  const n=normalize(t,p); expr=n.s; pos=Math.min(n.p,expr.length);
+  drawDisp(); return true;
+}
+function pressDigit(dg){ commit(expr.slice(0,pos)+dg+expr.slice(pos),pos+1); }
 function pressComma(){
-  const i=nums.length-1;
-  if(nums[i]==='') nums[i]='0,';
-  else if(nums[i].indexOf(',')>=0) return;
-  else nums[i]+=',';
-  drawDisp();
+  const prev=expr[pos-1];
+  if(prev===',') return;
+  const L=expr.slice(0,pos).split(/[+\-*\/]/).pop(), R=expr.slice(pos).split(/[+\-*\/]/)[0];
+  if((L+R).indexOf(',')>=0){ toast('Un número solo puede tener una coma'); return; }
+  const ins=(pos===0||isOp(prev))?'0,':',';
+  commit(expr.slice(0,pos)+ins+expr.slice(pos),pos+ins.length);
 }
 function pressOp(o){
-  const i=nums.length-1;
-  if(nums[i]===''){
-    if(nums.length===1) return;
-    if(o===op) return;
-    if(nums.length===2){ op=o; drawDisp(); return; }
-    toast('Con varios sumandos solo puedes seguir sumando'); return;
+  if(pos===0) return;
+  const prev=expr[pos-1], next=expr[pos];
+  if(isOp(prev)){
+    if(prev===o) return;
+    const ops=expr.match(/[+\-*\/]/g)||[];
+    if(ops.length===1){ commit(expr.slice(0,pos-1)+o+expr.slice(pos),pos); }
+    else toast('Con varios sumandos solo puedes seguir sumando');
+    return;
   }
-  if(op===null){ op=o; nums.push(''); }
-  else if(o===op&&op==='+'){ nums.push(''); }
-  else { toast('Una sola operación cada vez (la suma admite varios sumandos)'); return; }
-  drawDisp();
+  if(isOp(next)) return;
+  commit(expr.slice(0,pos)+o+expr.slice(pos),pos+1);
 }
-function back(){
-  const i=nums.length-1;
-  if(nums[i]!==''){ nums[i]=nums[i].slice(0,-1); }
-  else if(nums.length>1){ nums.pop(); if(nums.length===1) op=null; }
-  drawDisp();
-}
-function clearAll(){ nums=['']; op=null; drawDisp(); }
+function back(){ if(pos===0) return; commit(expr.slice(0,pos-1)+expr.slice(pos),pos-1); }
+function supr(){ if(pos>=expr.length) return; commit(expr.slice(0,pos)+expr.slice(pos+1),pos); }
+function moveCaret(dx){ pos=Math.max(0,Math.min(expr.length,pos+dx)); drawDisp(); }
+function clearAll(){ expr=''; pos=0; drawDisp(); }
 
 function build(c){
   const L=c.L;
@@ -424,8 +457,11 @@ function show(){
   fit();
 }
 function equals(){
-  if(nums.length<2||nums[nums.length-1]===''){ toast('Completa la operación'); return; }
-  const L=nums.map(parseNum);
+  const parts=expr.split(/([+\-*\/])/);
+  const strs=parts.filter((_,i)=>i%2===0), ops=parts.filter((_,i)=>i%2===1);
+  if(strs.length<2||strs.some(x=>x==='')){ toast('Completa la operación'); return; }
+  const op=ops[0];
+  const L=strs.map(parseNum);
   if(op==='-'){
     const D=Math.max(L[0].d.length,L[1].d.length);
     if(Number(L[0].i+L[0].d.padEnd(D,'0'))<Number(L[1].i+L[1].d.padEnd(D,'0'))){
@@ -459,6 +495,18 @@ document.querySelector('.keys').addEventListener('click',e=>{
   else if(k==='=') equals();
   else pressOp(k);
 });
+$('#disp').addEventListener('click',e=>{
+  if(!expr) return;
+  const sp=e.target.closest('span[data-i]');
+  if(sp){
+    const r=sp.getBoundingClientRect(), i=+sp.dataset.i;
+    pos=(e.clientX<r.left+r.width/2)?i:i+1;
+  } else {
+    const first=$('#disp span[data-i]');
+    pos=(first&&e.clientX<first.getBoundingClientRect().left)?0:expr.length;
+  }
+  drawDisp();
+});
 $('#modes').addEventListener('click',e=>{
   const b=e.target.closest('button'); if(!b||!cur)return;
   divMode=b.dataset.m; show();
@@ -475,6 +523,11 @@ document.addEventListener('keydown',e=>{
   else if(k==='/'||k===':') {e.preventDefault();pressOp('/');}
   else if(k==='Enter'||k==='='){e.preventDefault();equals();}
   else if(k==='Backspace') back();
+  else if(k==='Delete') supr();
+  else if(k==='ArrowLeft'){e.preventDefault();moveCaret(-1);}
+  else if(k==='ArrowRight'){e.preventDefault();moveCaret(1);}
+  else if(k==='Home'){e.preventDefault();pos=0;drawDisp();}
+  else if(k==='End'){e.preventDefault();pos=expr.length;drawDisp();}
   else if(k==='Escape') clearAll();
 });
 $('#back').addEventListener('click',()=>{
